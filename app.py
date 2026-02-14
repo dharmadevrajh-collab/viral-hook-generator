@@ -19,7 +19,8 @@ if not api_key:
 
 # 4. Configure the AI
 genai.configure(api_key=api_key)
-model = genai.GenerativeModel('gemini-1.5-flash')
+model = genai.GenerativeModel('gemini-1.5-flash-latest')
+
 
 # 5. The Logic
 topic = st.text_input("What is your video topic?", placeholder="e.g., How to lose weight without the gym")
@@ -44,4 +45,5 @@ if st.button("Generate Hooks"):
                 response = model.generate_content(prompt)
                 st.markdown(response.text)
             except Exception as e:
+
                 st.error(f"An error occurred: {e}")

@@ -1,10 +1,9 @@
 import streamlit as st
 import google.generativeai as genai
 import sqlite3
-import hashlib
 from datetime import datetime, timedelta
-import pandas as pd
 import time
+import hashlib
 
 # Page config
 st.set_page_config(
@@ -17,26 +16,38 @@ st.set_page_config(
 st.markdown("""
 <style>
     .stButton button {
-        background-color: #FF4B4B;
+        background: linear-gradient(90deg, #FF4B4B 0%, #FF8C42 100%);
         color: white;
         font-weight: bold;
         width: 100%;
+        border: none;
+        padding: 0.75rem;
+        font-size: 1.1rem;
     }
     .free-trial-badge {
         background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
         color: white;
-        padding: 0.5rem;
+        padding: 1rem;
         border-radius: 0.5rem;
         text-align: center;
         font-weight: bold;
+        margin: 1rem 0;
     }
     .paywall-box {
-        background-color: #1E1E1E;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         color: white;
         padding: 2rem;
         border-radius: 1rem;
         text-align: center;
         margin: 2rem 0;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+    }
+    .hook-card {
+        background: #f8f9fa;
+        padding: 1.5rem;
+        border-radius: 0.5rem;
+        margin: 1rem 0;
+        border-left: 4px solid #FF4B4B;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -46,18 +57,19 @@ def init_db():
     conn = sqlite3.connect('users.db')
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS users
-                 (ip TEXT PRIMARY KEY, 
-                  trial_count INTEGER,
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  ip TEXT UNIQUE,
+                  trial_count INTEGER DEFAULT 0,
                   last_used DATE,
                   is_paid BOOLEAN DEFAULT 0,
-                  email TEXT)''')
+                  email TEXT,
+                  subscribed_date DATE)''')
     conn.commit()
     conn.close()
 
-# Get user IP (for trial tracking)
+# Get user IP
 def get_user_ip():
     try:
-        # This works on Streamlit Cloud
         return st.context.headers.get('X-Forwarded-For', '127.0.0.1').split(',')[0]
     except:
         return '127.0.0.1'
@@ -66,29 +78,25 @@ def get_user_ip():
 def check_trial_status(ip):
     conn = sqlite3.connect('users.db')
     c = conn.cursor()
-    
-    # Check if user exists
     c.execute("SELECT trial_count, last_used, is_paid FROM users WHERE ip=?", (ip,))
     result = c.fetchone()
     
+    today = datetime.now().strftime('%Y-%m-%d')
+    
     if result:
         trial_count, last_used, is_paid = result
-        
-        # Reset count if last used was more than 30 days ago
+        # Reset if 30 days passed
         if last_used and datetime.strptime(last_used, '%Y-%m-%d') < datetime.now() - timedelta(days=30):
             trial_count = 0
-            c.execute("UPDATE users SET trial_count=0, last_used=? WHERE ip=?", 
-                     (datetime.now().strftime('%Y-%m-%d'), ip))
+            c.execute("UPDATE users SET trial_count=0, last_used=? WHERE ip=?", (today, ip))
             conn.commit()
             conn.close()
             return {'count': 0, 'is_paid': is_paid}
-        
         conn.close()
         return {'count': trial_count, 'is_paid': is_paid}
     else:
-        # New user
         c.execute("INSERT INTO users (ip, trial_count, last_used) VALUES (?, ?, ?)",
-                 (ip, 0, datetime.now().strftime('%Y-%m-%d')))
+                 (ip, 0, today))
         conn.commit()
         conn.close()
         return {'count': 0, 'is_paid': False}
@@ -97,16 +105,17 @@ def check_trial_status(ip):
 def update_trial_count(ip):
     conn = sqlite3.connect('users.db')
     c = conn.cursor()
-    c.execute("UPDATE users SET trial_count = trial_count + 1, last_used = ? WHERE ip=?", 
-             (datetime.now().strftime('%Y-%m-%d'), ip))
+    today = datetime.now().strftime('%Y-%m-%d')
+    c.execute("UPDATE users SET trial_count = trial_count + 1, last_used = ? WHERE ip=?", (today, ip))
     conn.commit()
     conn.close()
 
-# Mark user as paid
+# Mark as paid
 def mark_as_paid(ip, email):
     conn = sqlite3.connect('users.db')
     c = conn.cursor()
-    c.execute("UPDATE users SET is_paid=1, email=? WHERE ip=?", (email, ip))
+    today = datetime.now().strftime('%Y-%m-%d')
+    c.execute("UPDATE users SET is_paid=1, email=?, subscribed_date=? WHERE ip=?", (email, today, ip))
     conn.commit()
     conn.close()
 
@@ -117,202 +126,162 @@ init_db()
 st.title("🎣 Viral Hook Generator Pro")
 st.markdown("Generate scroll-stopping hooks for TikTok, Reels, and YouTube Shorts")
 
-# Sidebar for API key (you'll hardcode this in production)
+# Sidebar
 with st.sidebar:
-    st.header("🔧 Configuration")
+    st.image("https://via.placeholder.com/300x100/FF4B4B/ffffff?text=VIRAL+HOOKS", use_column_width=True)
+    st.header("🔧 Settings")
     
-    # For production, hardcode your API key here
-    API_KEY = st.secrets.get("GEMINI_API_KEY", "")  # Use Streamlit secrets
-    
-    if not API_KEY:
-        API_KEY = st.text_input("Enter your Gemini API Key", type="password")
+    # API Key
+    API_KEY = st.text_input("Enter your Gemini API Key", type="password", help="Get it from Google AI Studio")
     
     st.markdown("---")
     st.markdown("### 📊 Your Status")
     
-    # Get user IP and check status
     user_ip = get_user_ip()
     user_status = check_trial_status(user_ip)
     
     if user_status['is_paid']:
         st.success("⭐ Premium Member")
+        st.balloons()
     else:
         remaining = 5 - user_status['count']
         if remaining > 0:
             st.info(f"🎁 Free Trials Left: {remaining}/5")
             st.progress(user_status['count']/5)
         else:
-            st.error("🚫 Trials exhausted")
-    
-    st.markdown("---")
-    st.markdown("Support: [Contact](mailto:support@yourdomain.com)")
+            st.error("🚫 Trials Exhausted - Upgrade to continue")
 
-# Check if user can use the app
+# PAYWALL SECTION
+STRIPE_PAYMENT_LINK = "https://buy.stripe.com/bJecN49sB0UPfno2QRafS00"  # YOUR STRIPE LINK HERE
+
 can_use = user_status['is_paid'] or user_status['count'] < 5
 
 if not can_use:
-    # PAYWALL SCREEN
     st.markdown("""
     <div class='paywall-box'>
         <h1>🔒 Trials Exhausted</h1>
-        <p>You've used all 5 free hook generations.</p>
-        <h2>Unlock Unlimited Access for $9/month</h2>
-        <ul style='text-align: left; margin: 2rem;'>
-            <li>✅ Unlimited hook generations</li>
-            <li>✅ 10+ psychological frameworks</li>
-            <li>✅ Priority support</li>
-            <li>✅ Export to CSV</li>
-        </ul>
+        <p style='font-size: 1.2rem;'>You've used all 5 free hook generations.</p>
+        <h2 style='font-size: 2.5rem;'>$9/month</h2>
+        <p style='margin: 2rem 0;'>Unlock unlimited access & premium features:</p>
+        <div style='text-align: left; max-width: 300px; margin: 0 auto;'>
+            ✓ Unlimited hook generations<br>
+            ✓ 10+ psychological frameworks<br>
+            ✓ Export to CSV<br>
+            ✓ Priority support<br>
+            ✓ Advanced analytics<br>
+        </div>
     </div>
     """, unsafe_allow_html=True)
     
-    # Payment form
-    with st.form("payment_form"):
-        st.subheader("Enter Payment Details")
-        email = st.text_input("Email Address")
-        card = st.text_input("Card Number", placeholder="4242 4242 4242 4242")
-        col1, col2 = st.columns(2)
-        with col1:
-            expiry = st.text_input("Expiry (MM/YY)")
-        with col2:
-            cvv = st.text_input("CVV", type="password")
-        
-        if st.form_submit_button("💳 Upgrade Now - $9/month"):
-            if email and card and expiry and cvv:
-                # In production, connect to Stripe here
-                mark_as_paid(user_ip, email)
-                st.success("✅ Payment successful! Refreshing...")
-                time.sleep(2)
-                st.rerun()
-            else:
-                st.error("Please fill all fields")
-    
-    # Alternative payment methods
-    st.markdown("---")
-    st.markdown("### 💰 Other Payment Options")
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.markdown("[PayPal](https://paypal.me/yourlink)")
+    col1, col2, col3 = st.columns([1,2,1])
     with col2:
-        st.markdown("[Cryptocurrency](https://yourcryptolink)")
-    with col3:
-        st.markdown("[Bank Transfer](mailto:payments@yourdomain.com)")
+        if st.button("💳 Upgrade Now - $9/month", type="primary", use_container_width=True):
+            js = f"window.open('{STRIPE_PAYMENT_LINK}')"
+            st.markdown(f'<script>{js}</script>', unsafe_allow_html=True)
+            st.success("Opening payment page...")
     
-    st.stop()  # Stop execution here for non-paid users
-
-# Configure Gemini
-if API_KEY:
-    try:
-        genai.configure(api_key=API_KEY)
-        model = genai.GenerativeModel('gemini-1.5-flash')
-    except Exception as e:
-        st.error(f"API Configuration Error: {e}")
-        st.stop()
-else:
-    st.error("Please enter your Gemini API Key in the sidebar")
+    with st.expander("Already paid? Click here"):
+        email = st.text_input("Email used for payment")
+        if st.button("Verify Payment"):
+            st.info("We'll verify and upgrade you within 24 hours. Email support@yourdomain.com if urgent.")
+    
     st.stop()
 
-# Main app interface for users who can use it
+# Main app (only runs if user has trials or paid)
+if not API_KEY:
+    st.warning("👆 Please enter your Gemini API Key in the sidebar")
+    st.stop()
+
+# Configure Gemini
+try:
+    genai.configure(api_key=API_KEY)
+    model = genai.GenerativeModel('gemini-1.5-flash')
+except Exception as e:
+    st.error(f"API Key Error: {e}")
+    st.stop()
+
+# App interface
 st.markdown(f"<div class='free-trial-badge'>✨ You have {5 - user_status['count']} free generations remaining</div>", unsafe_allow_html=True)
 
 # Topic input
 topic = st.text_input(
-    "What's your video topic?", 
-    placeholder="e.g., how to make money online, fitness tips, relationship advice"
+    "What's your video topic?",
+    placeholder="e.g., how to make money online, fitness tips, relationship advice",
+    help="Be specific for better hooks"
 )
 
-# Advanced options
-with st.expander("⚙️ Advanced Settings"):
-    col1, col2 = st.columns(2)
-    with col1:
-        frameworks = st.multiselect(
-            "Hook Frameworks",
-            ["Curiosity Gap", "Negativity Bias", "Us vs Them", "Immediate Value", "Controversy", "Storytelling", "Shock Value"],
-            default=["Curiosity Gap", "Immediate Value", "Storytelling"]
-        )
-    with col2:
-        tone = st.selectbox(
-            "Tone",
-            ["Professional", "Casual", "Urgent", "Humorous", "Inspirational"]
-        )
-    
-    num_hooks = st.slider("Number of hooks", 5, 20, 10)
+# Options
+col1, col2 = st.columns(2)
+with col1:
+    framework = st.selectbox(
+        "Hook Style",
+        ["Curiosity Gap", "Negativity Bias", "Us vs Them", "Immediate Value", "Storytelling", "Controversy"]
+    )
+with col2:
+    tone = st.selectbox(
+        "Tone",
+        ["Professional", "Casual", "Urgent", "Humorous", "Inspirational"]
+    )
 
 # Generate button
-if st.button("🎯 Generate Viral Hooks", type="primary"):
+if st.button("🎯 Generate Viral Hooks", type="primary", use_container_width=True):
     if not topic:
         st.error("Please enter a topic!")
     else:
         with st.spinner("🧠 Analyzing psychological triggers..."):
             try:
-                # Increment trial count for free users
+                # Update trial count for free users
                 if not user_status['is_paid']:
                     update_trial_count(user_ip)
                 
                 # Enhanced prompt
-                prompt = f"""You are an expert viral video scriptwriter. Generate {num_hooks} viral hooks for: '{topic}'
+                prompt = f"""You are an expert viral video scriptwriter. Generate 5 viral hooks for topic: '{topic}'
 
-Requirements:
-- Use frameworks: {', '.join(frameworks) if frameworks else 'All available'}
-- Tone: {tone}
-- Each hook must make people stop scrolling
-- Keep hooks under 10 words
-- Use psychological triggers
+Style: {framework}
+Tone: {tone}
 
-Format each hook EXACTLY like this:
+For each hook:
+1. Make it STOP THE SCROLL in first 3 seconds
+2. Use psychological triggers
+3. Keep under 10 words
 
-**Hook #:** [hook text]
-**Psychology:** [what trigger it uses]
-**Visual:** [what to show on screen]
-**Example Script:** [15-second script idea]
+Format EXACTLY:
 
-Make them punchy and conversion-focused."""
+🔴 Hook 1:
+[hook text]
 
+💡 Why it works:
+[psychological reason]
+
+📹 Visual:
+[what to show on screen]
+
+---
+"""
+                
                 response = model.generate_content(prompt)
                 
                 # Display results
-                st.success(f"✅ Generated {num_hooks} viral hooks!")
+                st.success("✅ Generated 5 viral hooks!")
                 
-                # Create tabs for different views
-                tab1, tab2 = st.tabs(["📝 Hooks", "📊 Analytics"])
-                
-                with tab1:
-                    hooks = response.text.split("**Hook #:")
-                    for i, hook in enumerate(hooks[1:], 1):
+                # Split and display nicely
+                hooks = response.text.split("---")
+                for hook in hooks:
+                    if hook.strip():
                         with st.container():
-                            st.markdown(f"### 🔥 Hook #{i}")
-                            st.markdown(f"**{hook.strip()}")
-                            st.markdown("---")
+                            st.markdown(f"<div class='hook-card'>{hook}</div>", unsafe_allow_html=True)
                 
-                with tab2:
-                    st.subheader("Hook Performance Predictions")
-                    data = pd.DataFrame({
-                        'Hook Type': frameworks[:3] + ['Other'] * (len(frameworks)-3) if len(frameworks) > 3 else frameworks,
-                        'Predicted CTR': [85, 72, 68, 60, 55][:len(frameworks)]
-                    })
-                    st.bar_chart(data.set_index('Hook Type'))
-                    
-                # Export option for paid users
-                if user_status['is_paid']:
-                    if st.button("📥 Export to CSV"):
-                        # Convert to CSV and download
-                        csv = response.text
-                        st.download_button(
-                            label="Download Hooks",
-                            data=csv,
-                            file_name=f"hooks_{topic[:20]}.txt",
-                            mime="text/plain"
-                        )
+                # Show countdown for free users
+                if not user_status['is_paid']:
+                    remaining = 5 - user_status['count'] - 1
+                    if remaining > 0:
+                        st.info(f"🎁 {remaining} free generations left. Upgrade for unlimited!")
+                    else:
+                        st.warning("⚠️ This was your last free generation! Upgrade to continue.")
                 
             except Exception as e:
                 st.error(f"Generation failed: {e}")
 
-# Show remaining trials
-if not user_status['is_paid']:
-    remaining = 5 - user_status['count']
-    if remaining > 0:
-        st.info(f"🎁 {remaining} free generations remaining. Upgrade for unlimited access!")
-        
-        # Upgrade CTA
-        if st.button("⭐ Upgrade to Pro ($9/month)"):
-            st.rerun()  # This will show the paywall
+# Footer
+st.markdown("---")
+st.markdown("Made with ❤️ for creators | [Terms](/) | [Privacy](/)")
